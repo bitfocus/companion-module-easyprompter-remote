@@ -1,0 +1,26 @@
+{
+  "id": "easyprompter-remote",
+  "type": "connection",
+  "name": "EasyPrompter",
+  "shortname": "EP",
+  "description": "Control EasyPrompter teleprompter — play/pause, speed, markers, timer",
+  "manufacturer": "EasyPrompter",
+  "products": ["EasyPrompter"],
+  "keywords": ["teleprompter", "prompter", "scroll", "broadcast"],
+  "version": "1.1.0",
+  "license": "MIT",
+  "repository": "git+https://github.com/bitfocus/companion-module-easyprompter-remote.git",
+  "bugs": "https://github.com/bitfocus/companion-module-easyprompter-remote/issues",
+  "maintainers": [
+    {
+      "name": "Michael Drob"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node22",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../dist/index.js"
+  }
+}

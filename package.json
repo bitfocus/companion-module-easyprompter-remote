@@ -1,0 +1,32 @@
+{
+	"name": "companion-module-easyprompter-remote",
+	"version": "1.1.0",
+	"main": "dist/index.js",
+	"type": "module",
+	"scripts": {
+		"build": "rimraf dist && tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch",
+		"package": "yarn build && companion-module-build",
+		"lint:raw": "eslint",
+		"lint": "yarn lint:raw ."
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bitfocus/companion-module-easyprompter-remote.git"
+	},
+	"bugs": {
+		"url": "https://github.com/bitfocus/companion-module-easyprompter-remote/issues"
+	},
+	"homepage": "https://github.com/bitfocus/companion-module-easyprompter-remote#readme",
+	"dependencies": {
+		"@companion-module/base": "^2.0.0",
+		"socket.io-client": "^4.8.3"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^2.0.0",
+		"@types/node": "^22.0.0",
+		"rimraf": "^6.0.0",
+		"typescript": "^5.7.0"
+	}
+}
