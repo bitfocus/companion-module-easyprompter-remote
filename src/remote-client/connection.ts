@@ -203,6 +203,9 @@ export class EasyPrompterConnection {
         // The Stream Deck plugin's bundled Node.js doesn't use the system
         // trust store, so local dev certs fail without this.
         rejectUnauthorized: false,
+        // Force WebSocket transport — polling adds ~1.5s latency per batch,
+        // unacceptable for real-time encoder dial events.
+        transports: ["websocket"],
       });
 
       this.socket.on("connect", () => {
@@ -328,15 +331,19 @@ export class EasyPrompterConnection {
         const lineHeight = typeof settings.lineHeight === "number" ? settings.lineHeight : undefined;
         const blackout = typeof settings.blackout === "boolean" ? settings.blackout : undefined;
         const screenMargin = typeof settings.screenMargin === "number" ? settings.screenMargin : undefined;
+        const activeDisplayName = typeof settings.activeDisplayName === "string" ? settings.activeDisplayName : (settings.activeDisplayName === null ? null : undefined);
+        const activeDisplayColor = typeof settings.activeDisplayColor === "string" ? settings.activeDisplayColor : (settings.activeDisplayColor === null ? null : undefined);
 
         // Only notify if we have relevant display settings
-        if (fontSize !== undefined || lineHeight !== undefined || blackout !== undefined || screenMargin !== undefined) {
+        if (fontSize !== undefined || lineHeight !== undefined || blackout !== undefined || screenMargin !== undefined || activeDisplayName !== undefined || activeDisplayColor !== undefined) {
           this._lastSettings = {
             ...this._lastSettings,
             ...(fontSize !== undefined ? { fontSize } : {}),
             ...(lineHeight !== undefined ? { lineHeight } : {}),
             ...(blackout !== undefined ? { blackout } : {}),
             ...(screenMargin !== undefined ? { screenMargin } : {}),
+            ...(activeDisplayName !== undefined ? { activeDisplayName } : {}),
+            ...(activeDisplayColor !== undefined ? { activeDisplayColor } : {}),
           };
           this.notifySettingsListeners();
         }
@@ -364,14 +371,20 @@ export class EasyPrompterConnection {
         const lineHeight = typeof global.lineHeight?.value === "number" ? global.lineHeight.value : undefined;
         const blackout = typeof global.blackout?.value === "boolean" ? global.blackout.value : undefined;
         const screenMargin = typeof global.screenMargin?.value === "number" ? global.screenMargin.value : undefined;
+        const activeDisplayNameRaw = global.activeDisplayName?.value;
+        const activeDisplayName = typeof activeDisplayNameRaw === "string" ? activeDisplayNameRaw : (activeDisplayNameRaw === null ? null : undefined);
+        const activeDisplayColorRaw = global.activeDisplayColor?.value;
+        const activeDisplayColor = typeof activeDisplayColorRaw === "string" ? activeDisplayColorRaw : (activeDisplayColorRaw === null ? null : undefined);
 
-        if (fontSize !== undefined || lineHeight !== undefined || blackout !== undefined || screenMargin !== undefined) {
+        if (fontSize !== undefined || lineHeight !== undefined || blackout !== undefined || screenMargin !== undefined || activeDisplayName !== undefined || activeDisplayColor !== undefined) {
           this._lastSettings = {
             ...this._lastSettings,
             ...(fontSize !== undefined ? { fontSize } : {}),
             ...(lineHeight !== undefined ? { lineHeight } : {}),
             ...(blackout !== undefined ? { blackout } : {}),
             ...(screenMargin !== undefined ? { screenMargin } : {}),
+            ...(activeDisplayName !== undefined ? { activeDisplayName } : {}),
+            ...(activeDisplayColor !== undefined ? { activeDisplayColor } : {}),
           };
           this.notifySettingsListeners();
         }
@@ -414,6 +427,7 @@ export class EasyPrompterConnection {
       this._timerNotifyTimer = null;
       this._timerNotifyPending = false;
     }
+
     this._reconnectScheduled = false;
     this._reconnectAttempts = 0;
     if (this.socket) {

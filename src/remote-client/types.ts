@@ -78,6 +78,8 @@ export interface SettingsData {
   lineHeight?: number;
   screenMargin?: number;
   blackout?: boolean;
+  activeDisplayName?: string | null;
+  activeDisplayColor?: string | null; // hex color e.g. "#448AFF"
 }
 
 /**

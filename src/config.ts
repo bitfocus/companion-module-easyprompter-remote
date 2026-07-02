@@ -1,12 +1,12 @@
 import type { SomeCompanionConfigField } from "@companion-module/base";
 
 /**
- * Module configuration — server URL and API key.
+ * Module configuration — server URL and integration key.
  */
 export interface EasyPrompterConfig {
   /** The base URL of the EasyPrompter instance */
   serverUrl: string;
-  /** API key for remote control authentication */
+  /** Integration key for remote control authentication */
   apiKey: string;
 }
 
@@ -17,12 +17,12 @@ export function getConfigFields(): SomeCompanionConfigField[] {
       id: "serverUrl",
       label: "Server URL",
       width: 8,
-      default: "https://beta.easyprompter.com",
+      default: "https://app.easyprompter.com",
     },
     {
       type: "textinput",
       id: "apiKey",
-      label: "API Key",
+      label: "Integration Key",
       width: 12,
     },
   ];

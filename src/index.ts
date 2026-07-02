@@ -93,6 +93,8 @@ export class EasyPrompterModule extends InstanceBase {
       script_id: "",
       blackout: "OFF",
       screen_margin: "—",
+      active_display: "Global",
+      active_display_color: "",
     });
 
     // Connect if configured
@@ -325,6 +327,12 @@ export class EasyPrompterModule extends InstanceBase {
           this.isBlackout = data.blackout;
           vars.blackout = data.blackout ? "ON" : "OFF";
           this.checkFeedbacks("is_blackout");
+        }
+        if (data.activeDisplayName !== undefined) {
+          vars.active_display = data.activeDisplayName ?? "Global";
+        }
+        if (data.activeDisplayColor !== undefined) {
+          vars.active_display_color = data.activeDisplayColor ?? "";
         }
         if (Object.keys(vars).length > 0) {
           this.setVariableValues(vars);

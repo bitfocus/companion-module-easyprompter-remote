@@ -8,7 +8,7 @@ Control your EasyPrompter teleprompter directly from Bitfocus Companion. Include
 
 1. Add an **EasyPrompter** connection in Companion
 2. Enter your **Server URL** — the default is `https://beta.easyprompter.com` (this will change to `https://easyprompter.com` at launch)
-3. Enter your **API Key** — find it in EasyPrompter → Settings → Remote Control
+3. Enter your **Integration Key** — find it in EasyPrompter → Settings → Integrations
 4. The connection status indicator turns green when connected
 
 ---
@@ -117,4 +117,4 @@ Drag-and-drop presets are organized into five categories:
 - **Status shows "Waiting"** — Connected but no teleprompter session is active; open a script in EasyPrompter
 - **Actions don't work** — Ensure a teleprompter session is active (status must be green/connected)
 - **Script button stays orange** — Loading timed out after 8 seconds; check your connection and try again
-- **Empty script dropdown** — Ensure you have scripts in your EasyPrompter account and that the API key has access
+- **Empty script dropdown** — Ensure you have scripts in your EasyPrompter account and that the integration key has access

@@ -14,5 +14,7 @@ export function getVariableDefinitions(): CompanionVariableDefinitions {
     script_id: { name: "Script ID" },
     blackout: { name: "Blackout State" },
     screen_margin: { name: "Screen Margin (%)" },
+    active_display: { name: "Active Display" },
+    active_display_color: { name: "Active Display Color" },
   };
 }
