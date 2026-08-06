@@ -1,5 +1,5 @@
 {
-	"id": "easyprompter",
+	"id": "easyprompter-remote",
 	"type": "connection",
 	"name": "EasyPrompter",
 	"shortname": "EP",
@@ -9,8 +9,8 @@
 	"keywords": ["teleprompter", "prompter", "scroll", "broadcast"],
 	"version": "1.2.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/michaeldrob/easyprompter-integrations.git",
-	"bugs": "https://github.com/michaeldrob/easyprompter-integrations/issues",
+	"repository": "git+https://github.com/bitfocus/companion-module-easyprompter-remote.git",
+	"bugs": "https://github.com/bitfocus/companion-module-easyprompter-remote/issues",
 	"maintainers": [
 		{
 			"name": "Michael Drob"
