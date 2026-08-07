@@ -1,5 +1,4 @@
 export { EasyPrompterConnection } from './connection.js'
-export { ConnectionManager } from './manager.js'
 export type {
 	ConnectionState,
 	Logger,

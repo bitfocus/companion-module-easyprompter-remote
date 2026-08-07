@@ -3,6 +3,33 @@ import type { EasyPrompterModule } from './index.js'
 import { ICONS } from './icons.js'
 import { FEEDBACK } from './constants.js'
 
+/**
+ * M10: Helper to resolve the scriptId for a script-related feedback.
+ * Uses the feedback's own scriptId option when set, falling back to
+ * the subscribedScripts map (from the load_script action on the same button).
+ */
+function resolveScriptId(instance: EasyPrompterModule, controlId: string, options: Record<string, unknown>): string {
+	const explicit = typeof options.scriptId === 'string' ? options.scriptId.trim() : ''
+	if (explicit) return explicit
+	return instance.subscribedScripts.get(controlId) ?? ''
+}
+
+/**
+ * M10: Script dropdown option shared by all three script-related feedbacks.
+ * When blank (default), falls back to the load_script action on the same button.
+ */
+function scriptIdOption(instance: EasyPrompterModule) {
+	return {
+		type: 'dropdown' as const,
+		label: 'Script (optional)',
+		id: 'scriptId',
+		default: '',
+		choices: [{ id: '', label: '— From Load Script action —' }, ...instance.cachedScripts],
+		tooltip: 'Leave blank to inherit from a Load Script action on this button, or pick a script explicitly.',
+		allowCustom: true,
+	}
+}
+
 export function getFeedbackDefinitions(instance: EasyPrompterModule): CompanionFeedbackDefinitions {
 	return {
 		[FEEDBACK.IS_PLAYING]: {
@@ -69,9 +96,9 @@ export function getFeedbackDefinitions(instance: EasyPrompterModule): CompanionF
 				png64: ICONS.bar_green,
 				pngalignment: 'center:top',
 			},
-			options: [],
+			options: [scriptIdOption(instance)],
 			callback: (feedback) => {
-				const scriptId = instance.subscribedScripts.get(feedback.controlId)
+				const scriptId = resolveScriptId(instance, feedback.controlId, feedback.options)
 				return !!(scriptId && scriptId === instance.currentScriptId)
 			},
 		},
@@ -85,9 +112,9 @@ export function getFeedbackDefinitions(instance: EasyPrompterModule): CompanionF
 				pngalignment: 'center:top',
 				text: '⏳',
 			},
-			options: [],
+			options: [scriptIdOption(instance)],
 			callback: (feedback) => {
-				const scriptId = instance.subscribedScripts.get(feedback.controlId)
+				const scriptId = resolveScriptId(instance, feedback.controlId, feedback.options)
 				return !!(scriptId && scriptId === instance.loadingScriptId)
 			},
 		},
@@ -101,9 +128,9 @@ export function getFeedbackDefinitions(instance: EasyPrompterModule): CompanionF
 				pngalignment: 'center:top',
 				text: '✕',
 			},
-			options: [],
+			options: [scriptIdOption(instance)],
 			callback: (feedback) => {
-				const scriptId = instance.subscribedScripts.get(feedback.controlId)
+				const scriptId = resolveScriptId(instance, feedback.controlId, feedback.options)
 				return !!(scriptId && scriptId === instance.failedScriptId)
 			},
 		},

@@ -1,4 +1,4 @@
-import { InstanceBase, InstanceStatus } from '@companion-module/base'
+import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@companion-module/base'
 
 import {
 	EasyPrompterConnection,
@@ -12,23 +12,29 @@ import {
 } from './remote-client/index.js'
 
 import { type EasyPrompterConfig, type EasyPrompterSecrets, getConfigFields } from './config.js'
-import type { SomeCompanionConfigField } from '@companion-module/base'
+import { getActionDefinitions } from './actions.js'
+import { getFeedbackDefinitions } from './feedbacks.js'
+import { getVariableDefinitions } from './variables.js'
+import { getPresetDefinitions, getPresetSections } from './presets.js'
+import { MIN_SPEED, MAX_SPEED, SCRIPT_FEEDBACKS } from './constants.js'
+import { UpgradeScripts } from './upgrades.js'
 
 /** Internal merged config for convenience (config + secrets). */
 interface MergedConfig {
 	serverUrl: string
 	apiKey: string
 }
-import { getActionDefinitions } from './actions.js'
-import { getFeedbackDefinitions } from './feedbacks.js'
-import { getVariableDefinitions } from './variables.js'
-import { getPresetDefinitions, getPresetSections } from './presets.js'
-import { MIN_SPEED, MAX_SPEED, SCRIPT_FEEDBACKS } from './constants.js'
 
 /**
  * EasyPrompter Companion module.
  * Connects to an EasyPrompter instance via the shared remote-client library
  * and exposes transport controls, speed adjustment, markers, and timer display.
+ *
+ * H2: Config and secrets are typed through the init/configUpdated signatures
+ * using EasyPrompterConfig and EasyPrompterSecrets. The v2 InstanceBase
+ * generic is only needed when you want compile-time enforcement of
+ * action/feedback IDs in checkFeedbacks(), which we handle with the
+ * FEEDBACK/SCRIPT_FEEDBACKS constants.
  */
 export class EasyPrompterModule extends InstanceBase {
 	private connection: EasyPrompterConnection | null = null
@@ -74,12 +80,22 @@ export class EasyPrompterModule extends InstanceBase {
 	private _pendingProgress = '0'
 	private _timerSyncTimer: ReturnType<typeof setTimeout> | null = null
 
+	// --- H1: refreshScripts abort/epoch/debounce ---
+	private _refreshAbort: AbortController | null = null
+	private _configEpoch = 0
+	private _scriptsChangedDebounce: ReturnType<typeof setTimeout> | null = null
+	/** Track consecutive refresh failures for L8 */
+	private _refreshFailures = 0
+
 	// --- Lifecycle ---
 
-	async init(config: Record<string, unknown>, _isFirstInit: boolean, secrets?: Record<string, unknown>): Promise<void> {
-		const c = config as unknown as EasyPrompterConfig
-		const s = secrets as unknown as EasyPrompterSecrets
-		this.config = { serverUrl: c?.serverUrl ?? '', apiKey: s?.apiKey ?? '' }
+	async init(config: EasyPrompterConfig, _isFirstInit: boolean, secrets?: EasyPrompterSecrets): Promise<void> {
+		// M6: Only use supplied values, fall back to empty string
+		this.config = {
+			serverUrl: config?.serverUrl ?? '',
+			apiKey: typeof secrets?.apiKey === 'string' ? secrets.apiKey : '',
+		}
+		this._configEpoch++
 
 		// Set up definitions
 		this.setActionDefinitions(getActionDefinitions(this))
@@ -103,6 +119,11 @@ export class EasyPrompterModule extends InstanceBase {
 			screen_margin: '—',
 		})
 
+		// #15: Warn about plaintext key transmission over HTTP
+		if (this.config.serverUrl && this.config.serverUrl.startsWith('http://')) {
+			this.log('warn', 'Server URL uses HTTP — integration key will be sent in plaintext. Use HTTPS for production.')
+		}
+
 		// Connect if configured
 		if (this.config.serverUrl && this.config.apiKey) {
 			this.connect()
@@ -111,10 +132,13 @@ export class EasyPrompterModule extends InstanceBase {
 		}
 	}
 
-	async configUpdated(config: Record<string, unknown>, secrets?: Record<string, unknown>): Promise<void> {
-		const c = config as unknown as EasyPrompterConfig
-		const s = secrets as unknown as EasyPrompterSecrets
-		this.config = { serverUrl: c?.serverUrl ?? '', apiKey: s?.apiKey ?? '' }
+	async configUpdated(config: EasyPrompterConfig, secrets?: EasyPrompterSecrets): Promise<void> {
+		// M6: Only overwrite apiKey when a new value is actually supplied
+		this.config = {
+			serverUrl: config?.serverUrl ?? '',
+			apiKey: typeof secrets?.apiKey === 'string' ? secrets.apiKey : this.config.apiKey,
+		}
+		this._configEpoch++
 		this.disconnect()
 
 		if (this.config.serverUrl && this.config.apiKey) {
@@ -162,7 +186,7 @@ export class EasyPrompterModule extends InstanceBase {
 			(!this.currentScriptId && titleMatches.length === 1 && titleMatches[0].id === scriptId)
 
 		if (isAlreadyLoaded) {
-			this.log('info', `[LoadScript] Script "${scriptId}" is already loaded — returning success`)
+			this.log('debug', `[LoadScript] Script "${scriptId}" is already loaded — returning success`)
 			this.currentScriptId = scriptId
 			this.checkFeedbacks(...SCRIPT_FEEDBACKS)
 			return
@@ -231,7 +255,7 @@ export class EasyPrompterModule extends InstanceBase {
 	// --- Private connection management ---
 
 	private connect(): void {
-		// Guard against connect() while already connected (L4)
+		// Guard against connect() while already connected
 		if (this.connection) {
 			this.disconnect()
 		}
@@ -248,17 +272,28 @@ export class EasyPrompterModule extends InstanceBase {
 
 		this.connection = new EasyPrompterConnection(this.config.serverUrl, this.config.apiKey, logger)
 
-		this.updateStatus(InstanceStatus.Connecting)
-
 		// Subscribe to connection state changes
 		this.unsubscribers.push(
-			this.connection.onConnectionStateChange((state: ConnectionState) => {
+			this.connection.onConnectionStateChange((state: ConnectionState, reason?: string) => {
 				this.connectionState = state
-				this.updateCompanionStatus(state)
+				this.updateCompanionStatus(state, reason)
 				this.updateStatusVariable(state)
 				this.checkFeedbacks('is_connected', 'is_waiting')
+
+				// M4: Reset prompter state when leaving active
+				if (state !== 'active') {
+					this.resetPrompterState()
+				}
+
+				// L2: Refresh scripts on transition to waiting/active (covers reconnects)
+				if (state === 'waiting' || state === 'active') {
+					void this.refreshScripts()
+				}
 			}),
 		)
+
+		// L1: Set Connecting status AFTER subscription wiring to avoid being immediately overwritten
+		this.updateStatus(InstanceStatus.Connecting)
 
 		// Subscribe to prompter state changes
 		this.unsubscribers.push(
@@ -350,7 +385,7 @@ export class EasyPrompterModule extends InstanceBase {
 		// Subscribe to script info changes
 		this.unsubscribers.push(
 			this.connection.onScriptInfoChange((data: ScriptInfo) => {
-				this.log('info', `Script info received: ${JSON.stringify(data)}`)
+				this.log('debug', `Script info received: ${JSON.stringify(data)}`)
 				if (data.scriptTitle !== undefined) {
 					this.currentScriptTitle = data.scriptTitle || ''
 					this.setVariableValues({ script_title: data.scriptTitle || '—' })
@@ -373,17 +408,17 @@ export class EasyPrompterModule extends InstanceBase {
 				}
 
 				this.log(
-					'info',
+					'debug',
 					`[LoadScript] scriptInfo: currentScriptId="${this.currentScriptId}" loadingScriptId="${this.loadingScriptId}"`,
 				)
 
 				// Handle loading state transitions
 				if (this.loadingScriptId) {
 					if (this.currentScriptId === this.loadingScriptId) {
-						this.log('info', `[LoadScript] Script confirmed loaded — clearing loading state`)
+						this.log('debug', `[LoadScript] Script confirmed loaded — clearing loading state`)
 						this.clearLoadingState()
 					} else if (this.currentScriptId) {
-						this.log('info', `[LoadScript] Different script loaded (${this.currentScriptId}) — clearing loading`)
+						this.log('debug', `[LoadScript] Different script loaded (${this.currentScriptId}) — clearing loading`)
 						this.clearLoadingState()
 					}
 					// else: no definitive scriptId yet, keep loading
@@ -393,39 +428,80 @@ export class EasyPrompterModule extends InstanceBase {
 			}),
 		)
 
-		// Re-fetch scripts when the server signals a change (create, delete, rename)
+		// H1: Debounce scripts_changed notifications (250ms trailing)
 		this.unsubscribers.push(
 			this.connection.onScriptsChanged(() => {
-				void this.refreshScripts()
+				if (this._scriptsChangedDebounce) {
+					clearTimeout(this._scriptsChangedDebounce)
+				}
+				this._scriptsChangedDebounce = setTimeout(() => {
+					this._scriptsChangedDebounce = null
+					void this.refreshScripts()
+				}, 250)
 			}),
 		)
 
 		// Start the connection
 		this.connection.connect()
-
-		// Fetch user scripts for the load_script dropdown
-		void this.refreshScripts()
 	}
 
 	/**
-	 * Fetch user's recent scripts from the API and update the load_script dropdown choices.
+	 * H1: Fetch user's recent scripts from the API with in-flight guard,
+	 * abort support, and config epoch checking.
 	 */
 	private async refreshScripts(): Promise<void> {
 		if (!this.config.serverUrl || !this.config.apiKey) return
 
+		// H1: Abort any in-flight request
+		if (this._refreshAbort) {
+			this._refreshAbort.abort()
+		}
+		const controller = new AbortController()
+		this._refreshAbort = controller
+
+		// H1: Capture config epoch to detect stale results
+		const epoch = this._configEpoch
+
 		try {
 			const url = this.config.serverUrl.replace(/\/+$/, '') + '/api/remote-keys/scripts'
-			// eslint-disable-next-line n/no-unsupported-features/node-builtins -- Companion runtime is Node 22
+
 			const resp = await fetch(url, {
 				headers: { Authorization: 'Bearer ' + this.config.apiKey },
-				// eslint-disable-next-line n/no-unsupported-features/node-builtins -- Companion runtime is Node 22
-				signal: AbortSignal.timeout(10_000),
+				// H1: Combine abort controller with 10s timeout
+
+				signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
 			})
+
+			// H1: Check if config changed while we were fetching
+			if (epoch !== this._configEpoch) {
+				this.log('debug', '[RefreshScripts] Config changed during fetch — discarding stale result')
+				return
+			}
+
+			// L8: Report auth failures as BadConfig
+			// #18: Only downgrade module status when the socket isn't already active,
+			// to avoid overwriting a healthy socket connection's Ok status.
+			if (resp.status === 401 || resp.status === 403) {
+				this.log('warn', `[RefreshScripts] Integration key rejected (HTTP ${resp.status})`)
+				if (this.connectionState !== 'active') {
+					this.updateStatus(InstanceStatus.BadConfig, 'Integration key rejected')
+				}
+				this._refreshFailures++
+				return
+			}
 
 			if (!resp.ok) {
 				this.log('warn', `Failed to fetch scripts: HTTP ${resp.status}`)
+				this._refreshFailures++
+				// L8: Report repeated network failure
+				if (this._refreshFailures >= 3 && this.connectionState !== 'active') {
+					this.updateStatus(InstanceStatus.ConnectionFailure, `Script fetch failed (HTTP ${resp.status})`)
+				}
 				return
 			}
+
+			// Success — reset failure counter
+			this._refreshFailures = 0
 
 			const data = (await resp.json()) as { scripts?: unknown[] }
 			const rawScripts = Array.isArray(data.scripts) ? data.scripts : []
@@ -438,6 +514,12 @@ export class EasyPrompterModule extends InstanceBase {
 						typeof (s as Record<string, unknown>).title === 'string',
 				)
 				.map((s) => ({ id: s.id, label: s.title || '(Untitled)' }))
+
+			// H1: Re-check epoch after JSON parsing
+			if (epoch !== this._configEpoch) {
+				this.log('debug', '[RefreshScripts] Config changed during parse — discarding stale result')
+				return
+			}
 
 			if (newScripts.length === 0 && this.cachedScripts.length === 0) {
 				this.log('warn', '[RefreshScripts] No scripts found — ensure scripts exist in your EasyPrompter account')
@@ -459,25 +541,58 @@ export class EasyPrompterModule extends InstanceBase {
 					this.currentScriptId = match.id
 					this.setVariableValues({ script_id: this.currentScriptId })
 					this.log(
-						'info',
+						'debug',
 						`[RefreshScripts] Resolved currentScriptId="${match.id}" from title "${this.currentScriptTitle}"`,
-					)
-				} else {
-					this.log(
-						'info',
-						`[RefreshScripts] Could not resolve scriptId from title "${this.currentScriptTitle}" — no match in ${this.cachedScripts.length} cached scripts`,
 					)
 				}
 			}
 			this.checkFeedbacks(...SCRIPT_FEEDBACKS)
 
 			this.log(
-				'info',
+				'debug',
 				`Refreshed scripts: ${this.cachedScripts.length} found, currentScriptId="${this.currentScriptId}"`,
 			)
 		} catch (err) {
+			// Don't log aborted requests (normal cancellation)
+			if (err instanceof Error && err.name === 'AbortError') return
 			this.log('warn', `Failed to fetch scripts: ${err}`)
+			this._refreshFailures++
+			// L8: Report repeated network failure
+			if (this._refreshFailures >= 3 && this.connectionState !== 'active') {
+				this.updateStatus(InstanceStatus.ConnectionFailure, `Script fetch failed: ${err}`)
+			}
+		} finally {
+			if (this._refreshAbort === controller) {
+				this._refreshAbort = null
+			}
 		}
+	}
+
+	/**
+	 * M4: Reset prompter-specific state when leaving the active connection state.
+	 * Called from the connection-state listener on any non-active transition.
+	 */
+	private resetPrompterState(): void {
+		this.isPlaying = false
+		this.isBlackout = false
+
+		// Clear timer sync
+		if (this._timerSyncTimer) {
+			clearTimeout(this._timerSyncTimer)
+			this._timerSyncTimer = null
+		}
+		this._displayedElapsed = '00:00'
+		this._displayedRemaining = '00:00'
+		this._pendingElapsed = '00:00'
+		this._pendingRemaining = '00:00'
+		this._pendingProgress = '0'
+
+		this.setVariableValues({
+			is_playing: 'Paused',
+			speed: '—',
+			blackout: 'OFF',
+		})
+		this.checkFeedbacks('is_playing', 'is_blackout', ...SCRIPT_FEEDBACKS)
 	}
 
 	private disconnect(): void {
@@ -486,6 +601,16 @@ export class EasyPrompterModule extends InstanceBase {
 			unsub()
 		}
 		this.unsubscribers = []
+
+		// H1: Abort any in-flight refreshScripts
+		if (this._refreshAbort) {
+			this._refreshAbort.abort()
+			this._refreshAbort = null
+		}
+		if (this._scriptsChangedDebounce) {
+			clearTimeout(this._scriptsChangedDebounce)
+			this._scriptsChangedDebounce = null
+		}
 
 		// Disconnect and clean up
 		if (this.connection) {
@@ -500,8 +625,9 @@ export class EasyPrompterModule extends InstanceBase {
 		this.currentSpeed = 150
 		this.currentScriptId = ''
 		this.currentScriptTitle = ''
+		this._refreshFailures = 0
 
-		// Clear timer sync and reset displayed values (L5)
+		// Clear timer sync and reset displayed values
 		if (this._timerSyncTimer) {
 			clearTimeout(this._timerSyncTimer)
 			this._timerSyncTimer = null
@@ -545,8 +671,9 @@ export class EasyPrompterModule extends InstanceBase {
 
 	/**
 	 * Map remote-client ConnectionState to Companion InstanceStatus.
+	 * L5: Now accepts an optional reason for error display.
 	 */
-	private updateCompanionStatus(state: ConnectionState): void {
+	private updateCompanionStatus(state: ConnectionState, reason?: string): void {
 		switch (state) {
 			case 'active':
 				this.updateStatus(InstanceStatus.Ok)
@@ -557,9 +684,19 @@ export class EasyPrompterModule extends InstanceBase {
 			case 'disconnected':
 				this.updateStatus(InstanceStatus.Disconnected)
 				break
-			case 'error':
-				this.updateStatus(InstanceStatus.ConnectionFailure)
+			case 'error': {
+				// L5: Auth errors are config problems, not connection failures
+				const isAuthError =
+					reason === 'INVALID_REMOTE_KEY' ||
+					reason === 'REMOTE_KEY_REVOKED' ||
+					reason === 'REMOTE_KEY_PLAN_INSUFFICIENT'
+				if (isAuthError) {
+					this.updateStatus(InstanceStatus.BadConfig, reason)
+				} else {
+					this.updateStatus(InstanceStatus.ConnectionFailure, reason)
+				}
 				break
+			}
 		}
 	}
 
@@ -599,6 +736,6 @@ export class EasyPrompterModule extends InstanceBase {
 	}
 }
 
-export const UpgradeScripts: never[] = []
+export { UpgradeScripts }
 
 export default EasyPrompterModule

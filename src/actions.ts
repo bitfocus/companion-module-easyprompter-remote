@@ -4,6 +4,16 @@ import { MIN_SPEED, MAX_SPEED, SCRIPT_FEEDBACKS } from './constants.js'
 
 const DEFAULT_SPEED_STEP = 5
 
+/**
+ * L4: Safe numeric coercion helper. Returns the parsed number if finite,
+ * otherwise falls back to the provided default. Prevents NaN propagation
+ * from expressions, imported configs, or malformed option values.
+ */
+function num(value: unknown, defaultValue: number): number {
+	const n = Number(value)
+	return Number.isFinite(n) ? n : defaultValue
+}
+
 export function getActionDefinitions(instance: EasyPrompterModule): CompanionActionDefinitions {
 	return {
 		play_pause: {
@@ -51,7 +61,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? DEFAULT_SPEED_STEP
+				const step = num(action.options.step, DEFAULT_SPEED_STEP)
 				instance.queueSpeedChange(step)
 			},
 		},
@@ -69,7 +79,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? DEFAULT_SPEED_STEP
+				const step = num(action.options.step, DEFAULT_SPEED_STEP)
 				instance.queueSpeedChange(-step)
 			},
 		},
@@ -87,7 +97,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, (action.options.speed as number) ?? 150))
+				const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(action.options.speed, 150)))
 				instance.sendAction({ type: 'set_speed', speedWpm: speed })
 			},
 		},
@@ -106,7 +116,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const rate = (action.options.rate as number) ?? 1.0
+				const rate = num(action.options.rate, 1.0)
 				instance.sendAction({ type: 'fast_forward_start', displacement: rate })
 			},
 		},
@@ -133,7 +143,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const rate = (action.options.rate as number) ?? 1.0
+				const rate = num(action.options.rate, 1.0)
 				instance.sendAction({ type: 'rewind_start', displacement: rate })
 			},
 		},
@@ -161,7 +171,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const displacement = Math.max(-1.0, Math.min(1.0, (action.options.displacement as number) ?? 0.5))
+				const displacement = Math.max(-1.0, Math.min(1.0, num(action.options.displacement, 0.5)))
 				instance.sendAction({ type: 'shuttle_set', displacement })
 			},
 		},
@@ -183,10 +193,11 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 					type: 'dropdown',
 					label: 'Direction',
 					id: 'direction',
-					default: '1',
+					// N5: Use readable values instead of cryptic 1/-1
+					default: 'forward',
 					choices: [
-						{ id: '1', label: 'Forward (down)' },
-						{ id: '-1', label: 'Backward (up)' },
+						{ id: 'forward', label: 'Forward (down)' },
+						{ id: 'backward', label: 'Backward (up)' },
 					],
 				},
 				{
@@ -199,8 +210,8 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const direction = (action.options.direction as string) === '-1' ? -1 : 1
-				const magnitude = Math.max(1, Math.min(5, (action.options.magnitude as number) ?? 1))
+				const direction = action.options.direction === 'backward' ? -1 : 1
+				const magnitude = Math.max(1, Math.min(5, num(action.options.magnitude, 1)))
 				instance.sendAction({ type: 'jog_tick', direction, magnitude })
 			},
 		},
@@ -219,7 +230,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 2
+				const step = num(action.options.step, 2)
 				instance.sendAction({ type: 'font_size_step', delta: step })
 			},
 		},
@@ -238,7 +249,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 2
+				const step = num(action.options.step, 2)
 				instance.sendAction({ type: 'font_size_step', delta: -step })
 			},
 		},
@@ -257,7 +268,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 10
+				const step = num(action.options.step, 10)
 				instance.sendAction({ type: 'line_height_step', delta: step })
 			},
 		},
@@ -276,7 +287,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 10
+				const step = num(action.options.step, 10)
 				instance.sendAction({ type: 'line_height_step', delta: -step })
 			},
 		},
@@ -304,7 +315,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 5
+				const step = num(action.options.step, 5)
 				instance.sendAction({ type: 'margin_step', delta: step })
 			},
 		},
@@ -323,7 +334,7 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 				},
 			],
 			callback: (action) => {
-				const step = (action.options.step as number) ?? 5
+				const step = num(action.options.step, 5)
 				instance.sendAction({ type: 'margin_step', delta: -step })
 			},
 		},
@@ -340,6 +351,8 @@ export function getActionDefinitions(instance: EasyPrompterModule): CompanionAct
 					default: '',
 					choices: [{ id: '', label: '— Select a script —' }, ...instance.cachedScripts],
 					tooltip: 'Select a script to load.',
+					// N4: Allow custom values from variables/expressions
+					allowCustom: true,
 				},
 			],
 			callback: (action) => {

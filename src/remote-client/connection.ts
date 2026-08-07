@@ -27,7 +27,7 @@ const PERMANENT_ERROR_CODES = [
 ]
 
 type StateListener = (state: PrompterState) => void
-type ConnectionStateListener = (state: ConnectionState) => void
+type ConnectionStateListener = (state: ConnectionState, reason?: string) => void
 type TimerListener = (data: TimerData) => void
 type SettingsListener = (data: SettingsData) => void
 type ScriptInfoListener = (data: ScriptInfo) => void
@@ -199,14 +199,16 @@ export class EasyPrompterConnection {
 
 		this.logger.info(`Connecting to EasyPrompter at ${this.serverUrl}`)
 
+		// L7: Capture socket in a local variable so the catch can close it properly
+		let sock: Socket | null = null
 		try {
-			this.socket = io(this.serverUrl, {
+			sock = io(this.serverUrl, {
 				path: '/api/socket/io',
 				auth: {
 					apiKey: this.apiKey,
 				},
 				query: {
-					apiKey: this.apiKey,
+					// M8: Only send clientId and clientType in query — apiKey stays in auth only
 					clientId: deriveClientId(this.apiKey),
 					clientType: 'remote',
 				},
@@ -220,6 +222,8 @@ export class EasyPrompterConnection {
 				// unacceptable for real-time encoder dial events.
 				transports: ['websocket'],
 			})
+
+			this.socket = sock
 
 			this.socket.on('connect', () => {
 				this.logger.info(`Connected to EasyPrompter at ${this.serverUrl}`)
@@ -235,14 +239,14 @@ export class EasyPrompterConnection {
 				this._lastErrorCode = null
 
 				// Clean up old socket completely
-				const sock = this.socket
+				const oldSock = this.socket
 				this.socket = null
-				sock?.removeAllListeners()
-				sock?.close()
+				oldSock?.removeAllListeners()
+				oldSock?.close()
 
 				if (errorCode && PERMANENT_ERROR_CODES.includes(errorCode)) {
 					this.logger.error(`Permanent error (${errorCode}) — will not reconnect`)
-					this.setConnectionState('error')
+					this.setConnectionState('error', errorCode)
 					return
 				}
 
@@ -258,14 +262,15 @@ export class EasyPrompterConnection {
 				const errorCode = errData?.code ?? null
 				const isPermanent = errorCode !== null && PERMANENT_ERROR_CODES.includes(errorCode)
 
-				const sock = this.socket
+				const oldSock = this.socket
 				this.socket = null
-				sock?.removeAllListeners()
-				sock?.close()
+				oldSock?.removeAllListeners()
+				oldSock?.close()
 
 				if (isPermanent) {
 					this.logger.error(`Permanent auth error (${errorCode}) — will not reconnect`)
-					this.setConnectionState('error')
+					// L5: Use descriptive reason for error status
+					this.setConnectionState('error', errorCode)
 					return
 				}
 
@@ -277,21 +282,27 @@ export class EasyPrompterConnection {
 			this.socket.on('waiting_for_session', () => {
 				this.logger.info('Waiting for teleprompter session...')
 				this._reconnectAttempts = 0 // Successful app-level auth
+				// M2: Clear sticky error code on successful auth
+				this._lastErrorCode = null
 				this.setConnectionState('waiting')
 			})
 
 			this.socket.on('session_joined', (data: Record<string, unknown>) => {
-				this.logger.info(`Joined session: ${JSON.stringify(data)}`)
+				this.logger.debug(`Joined session: ${JSON.stringify(data)}`)
 				this._reconnectAttempts = 0 // Successful app-level auth
+				// M2: Clear sticky error code on successful auth
+				this._lastErrorCode = null
 				this.setConnectionState('active')
 			})
 
 			this.socket.on('session_state', (data: Record<string, unknown>) => {
-				this.logger.info(
+				this.logger.debug(
 					// eslint-disable-next-line @typescript-eslint/no-base-to-string -- server always sends string
 					`Session state: scriptId=${data.scriptId != null ? String(data.scriptId) : '(null)'}, status=${String(data.status)}, paused=${String(data.paused)}`,
 				)
 				this._reconnectAttempts = 0 // Successful app-level auth
+				// M2: Clear sticky error code on successful auth
+				this._lastErrorCode = null
 				this.setConnectionState('active')
 				const paused = typeof data.paused === 'number' ? data.paused : 1
 				const speed = typeof data.playbackSpeed === 'number' ? data.playbackSpeed : 150
@@ -302,12 +313,7 @@ export class EasyPrompterConnection {
 				const ssScriptId = typeof data.scriptId === 'string' ? data.scriptId : undefined
 				const ssScriptTitle = typeof data.scriptTitle === 'string' ? data.scriptTitle : undefined
 				if (ssScriptId !== undefined || ssScriptTitle !== undefined) {
-					this._lastScriptInfo = {
-						...this._lastScriptInfo,
-						...(ssScriptId !== undefined ? { scriptId: ssScriptId } : {}),
-						...(ssScriptTitle !== undefined ? { scriptTitle: ssScriptTitle } : {}),
-					}
-					this.notifyScriptInfoListeners()
+					this.mergeScriptInfo(ssScriptId, ssScriptTitle)
 				}
 			})
 
@@ -338,18 +344,21 @@ export class EasyPrompterConnection {
 			})
 
 			this.socket.on('scripts_changed', () => {
-				this.logger.info('Script list changed — notifying listeners')
+				this.logger.debug('Script list changed — notifying listeners')
 				this.notifyScriptsChangedListeners()
 			})
 
 			this.socket.on('timer_update', (data: Record<string, unknown>) => {
-				// Validate types before propagating
-				const timer: TimerData = {
-					elapsed: typeof data.elapsed === 'string' ? data.elapsed : undefined,
-					remaining: typeof data.remaining === 'string' ? data.remaining : undefined,
-					progress: typeof data.progress === 'number' ? data.progress : undefined,
+				// M7: Merge instead of replace — partial updates don't blank existing values
+				const elapsed = typeof data.elapsed === 'string' ? data.elapsed : undefined
+				const remaining = typeof data.remaining === 'string' ? data.remaining : undefined
+				const progress = typeof data.progress === 'number' ? data.progress : undefined
+				this._lastTimer = {
+					...this._lastTimer,
+					...(elapsed !== undefined ? { elapsed } : {}),
+					...(remaining !== undefined ? { remaining } : {}),
+					...(progress !== undefined ? { progress } : {}),
 				}
-				this._lastTimer = timer
 				this.notifyTimerListeners()
 			})
 
@@ -362,27 +371,13 @@ export class EasyPrompterConnection {
 				const lineHeight = typeof settings.lineHeight === 'number' ? settings.lineHeight : undefined
 				const blackout = typeof settings.blackout === 'boolean' ? settings.blackout : undefined
 				const screenMargin = typeof settings.screenMargin === 'number' ? settings.screenMargin : undefined
-				const activeDisplayName =
-					typeof settings.activeDisplayName === 'string'
-						? settings.activeDisplayName
-						: settings.activeDisplayName === null
-							? null
-							: undefined
-				const activeDisplayColor =
-					typeof settings.activeDisplayColor === 'string'
-						? settings.activeDisplayColor
-						: settings.activeDisplayColor === null
-							? null
-							: undefined
 
 				// Only notify if we have relevant display settings
 				if (
 					fontSize !== undefined ||
 					lineHeight !== undefined ||
 					blackout !== undefined ||
-					screenMargin !== undefined ||
-					activeDisplayName !== undefined ||
-					activeDisplayColor !== undefined
+					screenMargin !== undefined
 				) {
 					this._lastSettings = {
 						...this._lastSettings,
@@ -390,8 +385,6 @@ export class EasyPrompterConnection {
 						...(lineHeight !== undefined ? { lineHeight } : {}),
 						...(blackout !== undefined ? { blackout } : {}),
 						...(screenMargin !== undefined ? { screenMargin } : {}),
-						...(activeDisplayName !== undefined ? { activeDisplayName } : {}),
-						...(activeDisplayColor !== undefined ? { activeDisplayColor } : {}),
 					}
 					this.notifySettingsListeners()
 				}
@@ -400,12 +393,7 @@ export class EasyPrompterConnection {
 				const scriptTitle = typeof settings.scriptTitle === 'string' ? settings.scriptTitle : undefined
 				const scriptId = typeof settings.scriptId === 'string' ? settings.scriptId : undefined
 				if (scriptTitle !== undefined || scriptId !== undefined) {
-					this._lastScriptInfo = {
-						...this._lastScriptInfo,
-						...(scriptTitle !== undefined ? { scriptTitle } : {}),
-						...(scriptId !== undefined ? { scriptId } : {}),
-					}
-					this.notifyScriptInfoListeners()
+					this.mergeScriptInfo(scriptId, scriptTitle)
 				}
 			})
 
@@ -419,28 +407,12 @@ export class EasyPrompterConnection {
 				const lineHeight = typeof global.lineHeight?.value === 'number' ? global.lineHeight.value : undefined
 				const blackout = typeof global.blackout?.value === 'boolean' ? global.blackout.value : undefined
 				const screenMargin = typeof global.screenMargin?.value === 'number' ? global.screenMargin.value : undefined
-				const activeDisplayNameRaw = global.activeDisplayName?.value
-				const activeDisplayName =
-					typeof activeDisplayNameRaw === 'string'
-						? activeDisplayNameRaw
-						: activeDisplayNameRaw === null
-							? null
-							: undefined
-				const activeDisplayColorRaw = global.activeDisplayColor?.value
-				const activeDisplayColor =
-					typeof activeDisplayColorRaw === 'string'
-						? activeDisplayColorRaw
-						: activeDisplayColorRaw === null
-							? null
-							: undefined
 
 				if (
 					fontSize !== undefined ||
 					lineHeight !== undefined ||
 					blackout !== undefined ||
-					screenMargin !== undefined ||
-					activeDisplayName !== undefined ||
-					activeDisplayColor !== undefined
+					screenMargin !== undefined
 				) {
 					this._lastSettings = {
 						...this._lastSettings,
@@ -448,8 +420,6 @@ export class EasyPrompterConnection {
 						...(lineHeight !== undefined ? { lineHeight } : {}),
 						...(blackout !== undefined ? { blackout } : {}),
 						...(screenMargin !== undefined ? { screenMargin } : {}),
-						...(activeDisplayName !== undefined ? { activeDisplayName } : {}),
-						...(activeDisplayColor !== undefined ? { activeDisplayColor } : {}),
 					}
 					this.notifySettingsListeners()
 				}
@@ -458,18 +428,18 @@ export class EasyPrompterConnection {
 				const scriptTitle = typeof global.scriptTitle?.value === 'string' ? global.scriptTitle.value : undefined
 				const scriptId = typeof global.scriptId?.value === 'string' ? global.scriptId.value : undefined
 				if (scriptTitle !== undefined || scriptId !== undefined) {
-					this._lastScriptInfo = {
-						...this._lastScriptInfo,
-						...(scriptTitle !== undefined ? { scriptTitle } : {}),
-						...(scriptId !== undefined ? { scriptId } : {}),
-					}
-					this.notifyScriptInfoListeners()
+					this.mergeScriptInfo(scriptId, scriptTitle)
 				}
 			})
 		} catch (err) {
 			this.logger.error(`Failed to create socket: ${err}`)
+			// L7: Close the orphaned socket if io() succeeded but a subsequent .on() threw
+			if (sock) {
+				sock.removeAllListeners()
+				sock.close()
+			}
 			this.socket = null
-			this.setConnectionState('error')
+			this.setConnectionState('error', 'Failed to create socket')
 		}
 	}
 
@@ -534,6 +504,24 @@ export class EasyPrompterConnection {
 	// --- Private methods ---
 
 	/**
+	 * Merge script info, only notifying listeners when values actually changed.
+	 * H4: Prevents flooding from settings_update payloads that repeat the same scriptTitle.
+	 */
+	private mergeScriptInfo(scriptId: string | undefined, scriptTitle: string | undefined): void {
+		const prev = this._lastScriptInfo
+		const idChanged = scriptId !== undefined && scriptId !== prev?.scriptId
+		const titleChanged = scriptTitle !== undefined && scriptTitle !== prev?.scriptTitle
+		if (!idChanged && !titleChanged) return
+
+		this._lastScriptInfo = {
+			...prev,
+			...(scriptId !== undefined ? { scriptId } : {}),
+			...(scriptTitle !== undefined ? { scriptTitle } : {}),
+		}
+		this.notifyScriptInfoListeners()
+	}
+
+	/**
 	 * Schedule a single reconnect with exponential backoff.
 	 * Guarantees only one reconnect timer is active at a time.
 	 */
@@ -565,6 +553,7 @@ export class EasyPrompterConnection {
 	/**
 	 * Throttled state listener notification — max ~10/sec.
 	 * Coalesces rapid updates so only the latest state is delivered.
+	 * M1: Each listener is wrapped in try/catch to prevent a single throw from killing the module.
 	 */
 	private notifyStateListeners(): void {
 		if (!this._lastState) return
@@ -574,13 +563,20 @@ export class EasyPrompterConnection {
 			this._stateNotifyPending = false
 			this._stateNotifyTimer = null
 			if (this._lastState) {
-				this.stateListeners.forEach((listener) => listener(this._lastState!))
+				for (const listener of this.stateListeners) {
+					try {
+						listener(this._lastState)
+					} catch (err) {
+						this.logger.error(`State listener error: ${err}`)
+					}
+				}
 			}
 		}, 100)
 	}
 
 	/**
 	 * Flush pending state notification immediately (for session_ended, disconnect).
+	 * M1: Each listener is wrapped in try/catch.
 	 */
 	private flushStateListeners(): void {
 		if (this._stateNotifyTimer) {
@@ -589,12 +585,19 @@ export class EasyPrompterConnection {
 			this._stateNotifyPending = false
 		}
 		if (this._lastState) {
-			this.stateListeners.forEach((listener) => listener(this._lastState!))
+			for (const listener of this.stateListeners) {
+				try {
+					listener(this._lastState)
+				} catch (err) {
+					this.logger.error(`State listener error: ${err}`)
+				}
+			}
 		}
 	}
 
 	/**
 	 * Throttled timer listener notification — max ~10/sec.
+	 * M1: Each listener is wrapped in try/catch.
 	 */
 	private notifyTimerListeners(): void {
 		if (!this._lastTimer) return
@@ -604,31 +607,60 @@ export class EasyPrompterConnection {
 			this._timerNotifyPending = false
 			this._timerNotifyTimer = null
 			if (this._lastTimer) {
-				this.timerListeners.forEach((listener) => listener(this._lastTimer!))
+				for (const listener of this.timerListeners) {
+					try {
+						listener(this._lastTimer)
+					} catch (err) {
+						this.logger.error(`Timer listener error: ${err}`)
+					}
+				}
 			}
 		}, 100)
 	}
 
-	private setConnectionState(state: ConnectionState): void {
+	/**
+	 * L5: Connection state now carries an optional reason for error display.
+	 */
+	private setConnectionState(state: ConnectionState, reason?: string): void {
 		if (this._connectionState === state) return
 		this._connectionState = state
-		this.connectionStateListeners.forEach((listener) => listener(state))
+		for (const listener of this.connectionStateListeners) {
+			try {
+				listener(state, reason)
+			} catch (err) {
+				this.logger.error(`Connection state listener error: ${err}`)
+			}
+		}
 	}
 
 	/**
 	 * Notify settings listeners immediately (infrequent events).
+	 * M1: Each listener is wrapped in try/catch.
 	 */
 	private notifySettingsListeners(): void {
 		if (!this._lastSettings) return
-		this.settingsListeners.forEach((listener) => listener(this._lastSettings!))
+		for (const listener of this.settingsListeners) {
+			try {
+				listener(this._lastSettings)
+			} catch (err) {
+				this.logger.error(`Settings listener error: ${err}`)
+			}
+		}
 	}
 
 	/**
 	 * Notify script info listeners immediately (infrequent events).
+	 * M1: Each listener is wrapped in try/catch.
 	 */
 	private notifyScriptInfoListeners(): void {
 		if (!this._lastScriptInfo) return
-		this.scriptInfoListeners.forEach((listener) => listener(this._lastScriptInfo!))
+		for (const listener of this.scriptInfoListeners) {
+			try {
+				listener(this._lastScriptInfo)
+			} catch (err) {
+				this.logger.error(`Script info listener error: ${err}`)
+			}
+		}
 	}
 
 	private notifyScriptsChangedListeners(): void {

@@ -1,4 +1,5 @@
 {
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
 	"id": "easyprompter-remote",
 	"type": "connection",
 	"name": "EasyPrompter",
@@ -7,13 +8,14 @@
 	"manufacturer": "EasyPrompter",
 	"products": ["EasyPrompter"],
 	"keywords": ["teleprompter", "prompter", "scroll", "broadcast"],
-	"version": "1.2.1",
+	"version": "0.0.0",
 	"license": "MIT",
 	"repository": "git+https://github.com/bitfocus/companion-module-easyprompter-remote.git",
 	"bugs": "https://github.com/bitfocus/companion-module-easyprompter-remote/issues",
 	"maintainers": [
 		{
-			"name": "Michael Drob"
+			"name": "Michael Drob",
+			"github": "michaeldrob"
 		}
 	],
 	"legacyIds": [],
