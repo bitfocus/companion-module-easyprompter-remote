@@ -23,9 +23,9 @@ export type RemoteControlAction =
 	| { type: 'reset' }
 	| { type: 'next_marker' }
 	| { type: 'prev_marker' }
-	| { type: 'rewind_start'; displacement?: number }
+	| { type: 'rewind_start' }
 	| { type: 'rewind_stop' }
-	| { type: 'fast_forward_start'; displacement?: number }
+	| { type: 'fast_forward_start' }
 	| { type: 'fast_forward_stop' }
 	| { type: 'set_speed'; speedWpm: number }
 	| { type: 'shuttle_set'; displacement: number }

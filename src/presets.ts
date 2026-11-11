@@ -157,7 +157,7 @@ export function getPresetDefinitions(): CompanionPresetDefinitions {
 			},
 			steps: [
 				{
-					down: [{ actionId: 'fast_forward_start', options: { rate: 1.0 } }],
+					down: [{ actionId: 'fast_forward_start', options: {} }],
 					up: [{ actionId: 'fast_forward_stop', options: {} }],
 				},
 			],
@@ -177,7 +177,7 @@ export function getPresetDefinitions(): CompanionPresetDefinitions {
 			},
 			steps: [
 				{
-					down: [{ actionId: 'rewind_start', options: { rate: 1.0 } }],
+					down: [{ actionId: 'rewind_start', options: {} }],
 					up: [{ actionId: 'rewind_stop', options: {} }],
 				},
 			],
